@@ -15,6 +15,11 @@ name: build
 #
 on: [workflow_dispatch]
 
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
 env:
   PKG_NAME: "terraform-provider-aws"
 
@@ -148,11 +153,106 @@ jobs:
               -ldflags "-s -w -X 'github.com/hashicorp/terraform-provider-aws/version.ProviderVersion=${{ needs.set-product-version.outputs.product-version }}'"
             cp LICENSE "$TARGET_DIR/LICENSE.txt"
 
+  # Create GitHub release with built binaries
+  create-release:
+    needs:
+      - build
+      - set-product-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "terraform-provider-aws_*"
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.set-product-version.outputs.product-version }}
+          name: v${{ needs.set-product-version.outputs.product-version }}
+          draft: false
+          prerelease: false
+          files: |
+            **/*.zip
+          generate_release_notes: true
+
+  # Build Terraform Provider Registry for GitHub Pages using existing artifacts
+  build-registry:
+    needs:
+      - build
+      - create-release
+      - set-product-version
+      - generate-metadata-file
+      - upload-terraform-registry-manifest-artifact
+    runs-on: ubuntu-latest
+    env:
+      OWNER: ${{ github.repository_owner }}
+      REPO: ${{ github.event.repository.name }}
+      VERSION: ${{ needs.set-product-version.outputs.product-version }}
+      OUT_DIR: site/providers/registry.terraform.io/${{ github.repository_owner }}/aws
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "*"
+          merge-multiple: true
+
+      - name: Build registry structure
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUT_DIR"
+
+          # index.json — list of available versions
+          cat > "$OUT_DIR/index.json" <<JSON
+          { "versions": { "${VERSION}": {} } }
+          JSON
+
+          # <version>.json — per-platform archive URLs
+          cat > "$OUT_DIR/${VERSION}.json" <<JSON
+          {
+            "archives": {
+              "darwin_arm64": { "url": "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/terraform-provider-aws_${VERSION}_darwin_arm64.zip" },
+              "darwin_amd64": { "url": "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/terraform-provider-aws_${VERSION}_darwin_amd64.zip" },
+              "linux_arm64":  { "url": "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/terraform-provider-aws_${VERSION}_linux_arm64.zip" },
+              "linux_amd64":  { "url": "https://github.com/${OWNER}/${REPO}/releases/download/v${VERSION}/terraform-provider-aws_${VERSION}_linux_amd64.zip" }
+            }
+          }
+          JSON
+
+          # Copy existing artifacts to registry structure if needed
+          if [ -f "metadata.json" ]; then
+            cp metadata.json "$OUT_DIR/"
+          fi
+          if [ -f "terraform-registry-manifest.json" ]; then
+            cp terraform-registry-manifest.json "$OUT_DIR/"
+          fi
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  # Deploy to GitHub Pages
+  deploy-pages:
+    needs: build-registry
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
   whats-next:
     needs:
       - build
+      - create-release
       - generate-metadata-file
       - upload-terraform-registry-manifest-artifact
+      - deploy-pages
     runs-on: ubuntu-latest
     name: "What's next?"
     steps:
