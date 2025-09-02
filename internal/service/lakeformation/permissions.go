@@ -221,8 +221,12 @@ func ResourcePermissions() *schema.Resource {
 						},
 						names.AttrExpression: {
 							Type:     schema.TypeSet,
-							Required: true,
+							Optional: true,
 							MinItems: 1,
+							ExactlyOneOf: []string{
+								"lf_tag_policy.0.expression",
+								"lf_tag_policy.0.expression_name",
+							},
 							Elem: &schema.Resource{
 								Schema: map[string]*schema.Schema{
 									names.AttrKey: {
@@ -242,6 +246,16 @@ func ResourcePermissions() *schema.Resource {
 										},
 									},
 								},
+							},
+						},
+						"expression_name": {
+							Type:         schema.TypeString,
+							Optional:     true,
+							ForceNew:     true,
+							ValidateFunc: validation.StringLenBetween(1, 255),
+							ExactlyOneOf: []string{
+								"lf_tag_policy.0.expression",
+								"lf_tag_policy.0.expression_name",
 							},
 						},
 						names.AttrResourceType: {
@@ -997,6 +1011,10 @@ func ExpandLFTagPolicyResource(tfMap map[string]any) *awstypes.LFTagPolicyResour
 		apiObject.Expression = ExpandLFTagExpression(v.List())
 	}
 
+	if v, ok := tfMap["expression_name"].(string); ok && v != "" {
+		apiObject.ExpressionName = aws.String(v)
+	}
+
 	if v, ok := tfMap[names.AttrResourceType].(string); ok && v != "" {
 		apiObject.ResourceType = awstypes.ResourceType(v)
 	}
@@ -1029,6 +1047,10 @@ func flattenLFTagPolicyResource(apiObject *awstypes.LFTagPolicyResource) map[str
 
 	if v := apiObject.CatalogId; v != nil {
 		tfMap[names.AttrCatalogID] = aws.ToString(v)
+	}
+
+	if v := apiObject.ExpressionName; v != nil {
+		tfMap["expression_name"] = aws.ToString(v)
 	}
 
 	if v := apiObject.Expression; v != nil {
